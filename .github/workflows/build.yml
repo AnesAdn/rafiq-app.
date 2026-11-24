@@ -20,19 +20,28 @@ jobs:
         run: yes | sdkmanager --licenses || true
       - name: Unpack project
         run: unzip -o app.zip -d project
-      - name: Create the Android project
-        working-directory: project
+      - name: Create the Android project and build APK
         run: |
+          PKG_PATH=$(find project -maxdepth 3 -name "package.json" | head -n 1)
+          if [ -z "$PKG_PATH" ]; then
+            echo "package.json not found inside project/"
+            find project -maxdepth 3
+            exit 1
+          fi
+          APP_DIR=$(dirname "$PKG_PATH")
+          echo "Using project directory: $APP_DIR"
+          cd "$APP_DIR"
           npm install
           npx cap add android
           node scripts/patch-android.js
           npx cap sync android
-      - name: Build APK
-        working-directory: project/android
-        run: |
+          cd android
           chmod +x gradlew
           ./gradlew assembleDebug
+          APK_FILE=$(find app/build/outputs/apk/debug -name "*.apk" | head -n 1)
+          cp "$APK_FILE" "$GITHUB_WORKSPACE/app-debug.apk"
       - uses: actions/upload-artifact@v4
         with:
           name: rafiq-almuslim-apk
-          path: project/android/app/build/outputs/apk/debug/app-debug.apk
+          path: app-debug.apk
+          
