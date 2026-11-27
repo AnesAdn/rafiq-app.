@@ -16,29 +16,33 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+      - name: Show build environment
+        run: |
+          node -v
+          java -version
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls "$ANDROID_HOME/platforms" || true
       - name: Accept Android SDK licenses
         run: yes | sdkmanager --licenses || true
       - name: Unpack project
         run: unzip -o app.zip -d project
-      - name: Create the Android project and build APK
+      - name: Add optional account settings
         run: |
-          PKG_PATH=$(find project -maxdepth 3 -name "package.json" | head -n 1)
-          if [ -z "$PKG_PATH" ]; then
-            echo "package.json not found inside project/"
-            find project -maxdepth 3
-            exit 1
-          fi
-          APP_DIR=$(dirname "$PKG_PATH")
-          echo "Using project directory: $APP_DIR"
-          cd "$APP_DIR"
+          if [ -f firebase-config.js ]; then cp firebase-config.js project/www/firebase-config.js; echo "account settings added"; else echo "no firebase-config.js - accounts stay off"; fi
+      - name: Download Quran text for the offline reader
+        working-directory: project
+        continue-on-error: true
+        run: |
+          curl --retry 3 -fsSL https://api.alquran.cloud/v1/quran/quran-uthmani -o quran-raw.json
+          node scripts/prep-quran.js
+      - name: Create the Android project and configure AdMob
+        working-directory: project
+        run: |
           npm install
           npm install @capacitor-community/admob
           npx cap add android
           node scripts/patch-android.js
           npx cap sync android
-          export ANDROID_COMPILE_SDK_VERSION=35
-          export ANDROID_TARGET_SDK_VERSION=35
-          export ANDROID_MIN_SDK_VERSION=23
           python3 -c '
           import glob, re
           files = glob.glob("android/**/*.gradle", recursive=True) + glob.glob("android/**/*.gradle.kts", recursive=True)
@@ -53,9 +57,8 @@ jobs:
                   if txt != orig:
                       with open(rel, "w", encoding="utf-8") as f:
                           f.write(txt)
-                      print("Updated:", rel)
-              except Exception as e:
-                  print("Skip:", rel, e)
+              except Exception:
+                  pass
           p = "android/app/src/main/AndroidManifest.xml"
           with open(p, "r", encoding="utf-8") as f:
               c = f.read()
@@ -65,12 +68,20 @@ jobs:
               with open(p, "w", encoding="utf-8") as f:
                   f.write(c)
           '
-          cd android
+      - name: Build signed release APK
+        working-directory: project/android
+        env:
+          KS_PASS: "-_LTGZDyMnsoFFci"
+        run: |
           chmod +x gradlew
-          ./gradlew assembleDebug
-          APK_FILE=$(find app/build/outputs/apk/debug -name "*.apk" | head -n 1)
-          cp "$APK_FILE" "$GITHUB_WORKSPACE/app-debug.apk"
+          ./gradlew assembleRelease \
+            -Pandroid.injected.signing.store.file="$GITHUB_WORKSPACE/project/release.keystore" \
+            -Pandroid.injected.signing.store.password="$KS_PASS" \
+            -Pandroid.injected.signing.key.alias=rafiq \
+            -Pandroid.injected.signing.key.password="$KS_PASS" \
+          || ./gradlew assembleDebug
       - uses: actions/upload-artifact@v4
         with:
-          name: rafiq-almuslim-apk
-          path: app-debug.apk
+          name: rafiq-almuslim-apk-v4
+          path: project/android/app/build/outputs/apk/**/*.apk
+          
