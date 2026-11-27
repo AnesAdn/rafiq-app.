@@ -32,9 +32,20 @@ jobs:
           echo "Using project directory: $APP_DIR"
           cd "$APP_DIR"
           npm install
+          npm install @capacitor-community/admob
           npx cap add android
           node scripts/patch-android.js
           npx cap sync android
+          python3 -c '
+          p = "android/app/src/main/AndroidManifest.xml"
+          with open(p, "r") as f:
+              c = f.read()
+          meta = """        <meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="ca-app-pub-6630383601701998~1024264367"/>\n    </application>"""
+          if "com.google.android.gms.ads.APPLICATION_ID" not in c:
+              c = c.replace("</application>", meta)
+              with open(p, "w") as f:
+                  f.write(c)
+          '
           cd android
           chmod +x gradlew
           ./gradlew assembleDebug
