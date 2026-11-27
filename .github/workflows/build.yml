@@ -1,4 +1,4 @@
-name: Build Android APK
+name: Build Rafiq Al-Muslim APK
 
 on:
   workflow_dispatch:
@@ -14,7 +14,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -31,9 +31,7 @@ jobs:
       - name: Unpack project
         run: |
           set -e
-          rm -rf project
-          mkdir project
-
+          mkdir -p project
           unzip -o app.zip -d project
 
           PACKAGE_JSON=$(find project -type f -name "package.json" -print -quit)
@@ -45,6 +43,35 @@ jobs:
 
           PROJECT_DIR=$(dirname "$PACKAGE_JSON")
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Fix Capacitor package ID
+        working-directory: project
+        run: |
+          set -e
+
+          CONFIG=$(find . -type f -name "capacitor.config.json" -print -quit)
+
+          if [ -z "$CONFIG" ]; then
+            echo "ERROR: capacitor.config.json not found"
+            exit 1
+          fi
+
+          python3 - "$CONFIG" <<'PY'
+          import json
+          import sys
+
+          path = sys.argv[1]
+
+          with open(path, "r", encoding="utf-8") as f:
+              config = json.load(f)
+
+          config["appId"] = "com.muslimpartnerstudio.rafiqalmuslim"
+
+          with open(path, "w", encoding="utf-8") as f:
+              json.dump(config, f, ensure_ascii=False, indent=2)
+
+          print("Package ID updated successfully")
+          PY
 
       - name: Install dependencies
         working-directory: ${{ env.PROJECT_DIR }}
@@ -84,7 +111,7 @@ jobs:
           print("AdMob configured")
           PY
 
-      - name: Build APK
+      - name: Build installable APK
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           set -e
@@ -92,53 +119,30 @@ jobs:
           cd android
           chmod +x gradlew
 
-          ./gradlew assembleRelease
+          ./gradlew assembleDebug
 
-      - name: Locate APK
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: |
-          set -e
+          APK="app/build/outputs/apk/debug/app-debug.apk"
 
-          echo "Searching for APK..."
-
-          find android -type f -name "*.apk" -print
-
-          APK=$(find android -type f -name "*.apk" | head -n 1)
-
-          if [ -z "$APK" ]; then
-            echo "ERROR: No APK found"
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: APK not found"
+            find app/build/outputs -type f
             exit 1
           fi
 
-          echo "FOUND APK:"
-          ls -lh "$APK"
-
           cp "$APK" "$GITHUB_WORKSPACE/rafiq-almuslim.apk"
 
-          echo "APK copied successfully"
+          echo "APK created successfully"
+          ls -lh "$GITHUB_WORKSPACE/rafiq-almuslim.apk"
 
-      - name: Create GitHub Release
+      - name: Upload APK to GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -e
 
-          echo "Checking APK..."
-          ls -lh rafiq-almuslim.apk
-
-          TAG="v1.0.0"
-
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            TAG="v1.0.1"
-          fi
-
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            TAG="v1.0.2"
-          fi
-
-          echo "Creating release: $TAG"
+          TAG="test-${GITHUB_RUN_NUMBER}"
 
           gh release create "$TAG" \
-            rafiq-almuslim.apk \
-            --title "Rafiq Al-Muslim $TAG" \
-            --notes "Rafiq Al-Muslim Android APK"
+            "$GITHUB_WORKSPACE/rafiq-almuslim.apk" \
+            --title "Rafiq Al-Muslim Test ${GITHUB_RUN_NUMBER}" \
+            --notes "Installable debug APK for testing"
