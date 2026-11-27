@@ -1,4 +1,3 @@
-
 name: Build Android APK
 
 on:
@@ -13,37 +12,31 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Download project
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Install Node.js
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      # 3. Install Java
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
 
-      # 4. Show environment
       - name: Show build environment
         run: |
           node -v
           npm -v
           java -version
           echo "ANDROID_HOME=$ANDROID_HOME"
-          ls "$ANDROID_HOME/platforms" || true
 
-      # 5. Accept Android licenses
       - name: Accept Android SDK licenses
         run: yes | sdkmanager --licenses || true
 
-      # 6. Extract app.zip
       - name: Unpack project
         run: |
           set -e
@@ -56,7 +49,7 @@ jobs:
           PACKAGE_JSON=$(find project -type f -name "package.json" -print -quit)
 
           if [ -z "$PACKAGE_JSON" ]; then
-            echo "ERROR: package.json not found"
+            echo "ERROR: package.json was not found"
             exit 1
           fi
 
@@ -65,17 +58,6 @@ jobs:
           echo "Project directory: $PROJECT_DIR"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      # 7. Optional Firebase settings
-      - name: Add optional account settings
-        run: |
-          if [ -f firebase-config.js ]; then
-            mkdir -p "$PROJECT_DIR/www"
-            cp firebase-config.js "$PROJECT_DIR/www/firebase-config.js"
-          else
-            echo "No Firebase configuration found"
-          fi
-
-      # 8. Download Quran
       - name: Download Quran text
         working-directory: ${{ env.PROJECT_DIR }}
         continue-on-error: true
@@ -88,8 +70,7 @@ jobs:
             node scripts/prep-quran.js
           fi
 
-      # 9. Create Android project
-      - name: Create Android project and configure AdMob
+      - name: Create Android project
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           set -e
@@ -122,18 +103,12 @@ jobs:
           print("AdMob configuration complete")
           '
 
-          echo "Android project ready"
-
-      # 10. Build and sign APK
-            - name: Build Signed Release APK
-        working-directory: ${{ env.PROJECT_DIR }}
+      - name: Check keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
         run: |
           set -e
-
-          echo "Checking signing secrets..."
 
           if [ -z "$KEYSTORE_BASE64" ]; then
             echo "ERROR: KEYSTORE_BASE64 is empty"
@@ -145,12 +120,9 @@ jobs:
             exit 1
           fi
 
-          echo "Decoding keystore..."
-
           echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.keystore"
 
-          echo "Checking keystore file..."
-
+          echo "Keystore size:"
           ls -lh "$RUNNER_TEMP/release.keystore"
 
           keytool -list \
@@ -159,10 +131,24 @@ jobs:
 
           echo "Keystore is valid."
 
+      - name: Build Release APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          set -e
+
           cd android
           chmod +x gradlew
 
           ./gradlew assembleRelease
+
+      - name: Sign APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          set -e
+
+          cd android
 
           BUILD_TOOLS=$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)
 
@@ -176,10 +162,9 @@ jobs:
           "$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner" verify \
             app/build/outputs/apk/release/app-release.apk
 
-          echo "Signed APK created successfully"
+          echo "Signed APK created successfully."
 
-      # 11. Upload APK
-      - name: Upload Signed APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Rafiq-Al-Muslim-Signed
