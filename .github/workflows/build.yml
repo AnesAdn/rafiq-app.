@@ -107,22 +107,44 @@ jobs:
       # ==========================================
       # Create Android project
       # ==========================================
+      
       - name: Create Android project and configure AdMob
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
+          set -e
 
-          echo "=========================================="
-          echo "Installing dependencies"
-          echo "=========================================="
-
+          echo "Installing dependencies..."
           npm install
 
-          npm install @capacitor-community/admob
+          echo "Installing AdMob for Capacitor 6..."
+          npm install @capacitor-community/admob@6
 
-          echo "=========================================="
-          echo "Creating Android project"
-          echo "=========================================="
-
+          echo "Creating Android project..."
           npx cap add android
 
-          if
+          echo "Patching Android..."
+          if [ -f scripts/patch-android.js ]; then
+            node scripts/patch-android.js
+          fi
+
+          echo "Syncing Capacitor..."
+          npx cap sync android
+
+          echo "Configuring AdMob..."
+          python3 -c '
+          from pathlib import Path
+
+          p = Path("android/app/src/main/AndroidManifest.xml")
+          c = p.read_text(encoding="utf-8")
+
+          admob = """        <meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="ca-app-pub-6630383601701998~1024264367"/>
+          """
+
+          if "com.google.android.gms.ads.APPLICATION_ID" not in c:
+              c = c.replace("</application>", admob + "    </application>")
+              p.write_text(c, encoding="utf-8")
+
+          print("AdMob configuration complete.")
+          '
+
+          echo "Android project ready."
