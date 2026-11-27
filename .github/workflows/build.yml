@@ -1,87 +1,304 @@
 name: Build Android APK
+
 on:
   push:
   workflow_dispatch:
+
 permissions:
   contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: 20
-      - uses: actions/setup-java@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
+
       - name: Show build environment
         run: |
           node -v
+          npm -v
           java -version
           echo "ANDROID_HOME=$ANDROID_HOME"
           ls "$ANDROID_HOME/platforms" || true
+
       - name: Accept Android SDK licenses
         run: yes | sdkmanager --licenses || true
+
+      # ==========================================
+      # Extract app.zip and find package.json
+      # ==========================================
       - name: Unpack project
-        run: unzip -o app.zip -d project
+        run: |
+          rm -rf project
+          mkdir -p project
+
+          unzip -o app.zip -d project
+
+          echo "=========================================="
+          echo "Extracted files:"
+          echo "=========================================="
+          find project -maxdepth 4 -type f | head -150
+
+          echo "=========================================="
+          echo "Searching for package.json..."
+          echo "=========================================="
+
+          PACKAGE_JSON=$(find project -type f -name "package.json" -print -quit)
+
+          if [ -z "$PACKAGE_JSON" ]; then
+            echo "ERROR: package.json was not found inside app.zip"
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$PACKAGE_JSON")
+
+          echo "package.json found at:"
+          echo "$PACKAGE_JSON"
+
+          echo "Project directory:"
+          echo "$PROJECT_DIR"
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      # ==========================================
+      # Optional Firebase configuration
+      # ==========================================
       - name: Add optional account settings
         run: |
-          if [ -f firebase-config.js ]; then cp firebase-config.js project/www/firebase-config.js; echo "account settings added"; else echo "no firebase-config.js - accounts stay off"; fi
+          if [ -f firebase-config.js ]; then
+            mkdir -p "$PROJECT_DIR/www"
+            cp firebase-config.js "$PROJECT_DIR/www/firebase-config.js"
+            echo "Firebase/account settings added"
+          else
+            echo "No firebase-config.js found - accounts stay off"
+          fi
+
+      # ==========================================
+      # Download Quran data
+      # ==========================================
       - name: Download Quran text for the offline reader
-        working-directory: project
+        working-directory: ${{ env.PROJECT_DIR }}
         continue-on-error: true
         run: |
-          curl --retry 3 -fsSL https://api.alquran.cloud/v1/quran/quran-uthmani -o quran-raw.json
-          node scripts/prep-quran.js
+          echo "Downloading Quran text..."
+
+          curl --retry 3 -fsSL \
+            https://api.alquran.cloud/v1/quran/quran-uthmani \
+            -o quran-raw.json
+
+          if [ -f scripts/prep-quran.js ]; then
+            node scripts/prep-quran.js
+          else
+            echo "prep-quran.js not found - skipping preparation"
+          fi
+
+      # ==========================================
+      # Create Android project
+      # ==========================================
       - name: Create the Android project and configure AdMob
-        working-directory: project
+        working-directory: ${{ env.PROJECT_DIR }}
         run: |
+          echo "=========================================="
+          echo "Installing npm dependencies"
+          echo "=========================================="
+
           npm install
+
+          echo "=========================================="
+          echo "Installing AdMob plugin"
+          echo "=========================================="
+
           npm install @capacitor-community/admob
+
+          echo "=========================================="
+          echo "Creating Android project"
+          echo "=========================================="
+
           npx cap add android
-          node scripts/patch-android.js
+
+          echo "=========================================="
+          echo "Patching Android project"
+          echo "=========================================="
+
+          if [ -f scripts/patch-android.js ]; then
+            node scripts/patch-android.js
+          else
+            echo "patch-android.js not found - skipping"
+          fi
+
+          echo "=========================================="
+          echo "Syncing Capacitor"
+          echo "=========================================="
+
           npx cap sync android
-          python3 -c '
-          import glob, re
-          files = glob.glob("android/**/*.gradle", recursive=True) + glob.glob("android/**/*.gradle.kts", recursive=True)
+
+          echo "=========================================="
+          echo "Configuring Android SDK versions"
+          echo "=========================================="
+
+          python3 - <<'PY'
+          import glob
+          import re
+
+          files = (
+              glob.glob("android/**/*.gradle", recursive=True)
+              + glob.glob("android/**/*.gradle.kts", recursive=True)
+          )
+
           for rel in files:
               try:
                   with open(rel, "r", encoding="utf-8") as f:
                       txt = f.read()
+
                   orig = txt
-                  txt = re.sub(r"(compileSdk(?:Version)?\s*(?:=|\s)\s*)\d+", r"\g<1>35", txt)
-                  txt = re.sub(r"(targetSdk(?:Version)?\s*(?:=|\s)\s*)\d+", r"\g<1>35", txt)
-                  txt = re.sub(r"(minSdk(?:Version)?\s*(?:=|\s)\s*)2[0-2]\b", r"\g<1>23", txt)
+
+                  txt = re.sub(
+                      r"(compileSdk(?:Version)?\s*(?:=|\s)\s*)\d+",
+                      r"\g<1>35",
+                      txt
+                  )
+
+                  txt = re.sub(
+                      r"(targetSdk(?:Version)?\s*(?:=|\s)\s*)\d+",
+                      r"\g<1>35",
+                      txt
+                  )
+
+                  txt = re.sub(
+                      r"(minSdk(?:Version)?\s*(?:=|\s)\s*)2[0-2]\b",
+                      r"\g<1>23",
+                      txt
+                  )
+
                   if txt != orig:
                       with open(rel, "w", encoding="utf-8") as f:
                           f.write(txt)
-              except Exception:
-                  pass
-          p = "android/app/src/main/AndroidManifest.xml"
-          with open(p, "r", encoding="utf-8") as f:
-              c = f.read()
-          meta = """        <meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="ca-app-pub-6630383601701998~1024264367"/>\n    </application>"""
+
+                      print("Updated:", rel)
+
+              except Exception as e:
+                  print("Skipped:", rel, e)
+
+          print("Android SDK configuration complete.")
+          PY
+
+          # ==========================================
+          # Add AdMob Application ID
+          # ==========================================
+
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+
+          if [ -f "$MANIFEST" ]; then
+
+            python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("android/app/src/main/AndroidManifest.xml")
+
+          c = p.read_text(encoding="utf-8")
+
+          ADMOB_ID = "ca-app-pub-6630383601701998~1024264367"
+
           if "com.google.android.gms.ads.APPLICATION_ID" not in c:
-              c = c.replace("</application>", meta)
-              with open(p, "w", encoding="utf-8") as f:
-                  f.write(c)
-          '
+
+              meta = (
+                  f'        <meta-data '
+                  f'android:name="com.google.android.gms.ads.APPLICATION_ID" '
+                  f'android:value="{ADMOB_ID}"/>\n'
+              )
+
+              c = c.replace(
+                  "</application>",
+                  meta + "    </application>"
+              )
+
+              p.write_text(c, encoding="utf-8")
+
+              print("AdMob Application ID added.")
+
+          else:
+              print("AdMob Application ID already exists.")
+          PY
+
+          else
+            echo "ERROR: AndroidManifest.xml not found"
+            exit 1
+          fi
+
+      # ==========================================
+      # Build APK
+      # ==========================================
       - name: Build signed release APK
-        working-directory: project/android
+        working-directory: ${{ env.PROJECT_DIR }}/android
         env:
-          KS_PASS: "-_LTGZDyMnsoFFci"
+          KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease \
-            -Pandroid.injected.signing.store.file="$GITHUB_WORKSPACE/project/release.keystore" \
-            -Pandroid.injected.signing.store.password="$KS_PASS" \
-            -Pandroid.injected.signing.key.alias=rafiq \
-            -Pandroid.injected.signing.key.password="$KS_PASS" \
-          || ./gradlew assembleDebug
-      - uses: actions/upload-artifact@v4
+
+          echo "=========================================="
+          echo "Looking for release keystore"
+          echo "=========================================="
+
+          find .. -name "*.keystore" -o -name "*.jks" || true
+
+          KEYSTORE=""
+
+          if [ -f "../release.keystore" ]; then
+            KEYSTORE="../release.keystore"
+          elif [ -f "../../release.keystore" ]; then
+            KEYSTORE="../../release.keystore"
+          elif [ -f "../rafiq.keystore" ]; then
+            KEYSTORE="../rafiq.keystore"
+          elif [ -f "../../rafiq.keystore" ]; then
+            KEYSTORE="../../rafiq.keystore"
+          fi
+
+          echo "Keystore detected:"
+          echo "$KEYSTORE"
+
+          if [ -n "$KEYSTORE" ] && [ -n "$KS_PASS" ]; then
+
+            echo "=========================================="
+            echo "Building signed RELEASE APK"
+            echo "=========================================="
+
+            ./gradlew assembleRelease \
+              -Pandroid.injected.signing.store.file="$KEYSTORE" \
+              -Pandroid.injected.signing.store.password="$KS_PASS" \
+              -Pandroid.injected.signing.key.alias=rafiq \
+              -Pandroid.injected.signing.key.password="$KS_PASS"
+
+          else
+
+            echo "=========================================="
+            echo "Release keystore/secret not available."
+            echo "Building DEBUG APK instead."
+            echo "=========================================="
+
+            ./gradlew assembleDebug
+
+          fi
+
+      # ==========================================
+      # Upload APK
+      # ==========================================
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
         with:
-          name: rafiq-almuslim-apk-v4
-          path: project/android/app/build/outputs/apk/**/*.apk
-          
+          name: rafiq-almuslim-apk
+          path: |
+            ${{ env.PROJECT_DIR }}/android/app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
