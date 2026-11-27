@@ -24,7 +24,7 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 21
+          java-version: 17
 
       - name: Show build environment
         run: |
@@ -121,7 +121,7 @@ jobs:
           echo "Installing AdMob plugin"
           echo "=========================================="
 
-          npm install @capacitor-community/admob
+          npm install @capacitor-community/admob@6.2.0
 
           echo "=========================================="
           echo "Creating Android project"
