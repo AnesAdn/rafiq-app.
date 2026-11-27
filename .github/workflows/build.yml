@@ -1,11 +1,10 @@
 name: Build Android APK
 
 on:
-  push:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -105,10 +104,16 @@ jobs:
 
           ./gradlew assembleRelease
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: Rafiq-Al-Muslim-APK
-          path: ${{ env.PROJECT_DIR }}/android/app/build/outputs/apk/release/app-release-unsigned.apk
-          if-no-files-found: error
-          retention-days: 7
+          ls -lh app/build/outputs/apk/release/
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          set -e
+
+          gh release create v1.0.0 \
+            app/build/outputs/apk/release/app-release-unsigned.apk \
+            --title "Rafiq Al-Muslim v1.0.0" \
+            --notes "Rafiq Al-Muslim Android APK"
