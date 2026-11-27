@@ -1,4 +1,130 @@
 
+name: Build Android APK
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Download project
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Install Node.js
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # 3. Install Java
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # 4. Show environment
+      - name: Show build environment
+        run: |
+          node -v
+          npm -v
+          java -version
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls "$ANDROID_HOME/platforms" || true
+
+      # 5. Accept Android licenses
+      - name: Accept Android SDK licenses
+        run: yes | sdkmanager --licenses || true
+
+      # 6. Extract app.zip
+      - name: Unpack project
+        run: |
+          set -e
+
+          rm -rf project
+          mkdir -p project
+
+          unzip -o app.zip -d project
+
+          PACKAGE_JSON=$(find project -type f -name "package.json" -print -quit)
+
+          if [ -z "$PACKAGE_JSON" ]; then
+            echo "ERROR: package.json not found"
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$PACKAGE_JSON")
+
+          echo "Project directory: $PROJECT_DIR"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      # 7. Optional Firebase settings
+      - name: Add optional account settings
+        run: |
+          if [ -f firebase-config.js ]; then
+            mkdir -p "$PROJECT_DIR/www"
+            cp firebase-config.js "$PROJECT_DIR/www/firebase-config.js"
+          else
+            echo "No Firebase configuration found"
+          fi
+
+      # 8. Download Quran
+      - name: Download Quran text
+        working-directory: ${{ env.PROJECT_DIR }}
+        continue-on-error: true
+        run: |
+          curl --retry 3 -fsSL \
+            https://api.alquran.cloud/v1/quran/quran-uthmani \
+            -o quran-raw.json
+
+          if [ -f scripts/prep-quran.js ]; then
+            node scripts/prep-quran.js
+          fi
+
+      # 9. Create Android project
+      - name: Create Android project and configure AdMob
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          set -e
+
+          npm install
+
+          npm install @capacitor-community/admob@6
+
+          npx cap add android
+
+          if [ -f scripts/patch-android.js ]; then
+            node scripts/patch-android.js
+          fi
+
+          npx cap sync android
+
+          python3 -c '
+          from pathlib import Path
+
+          p = Path("android/app/src/main/AndroidManifest.xml")
+          c = p.read_text(encoding="utf-8")
+
+          admob = """        <meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="ca-app-pub-6630383601701998~1024264367"/>
+          """
+
+          if "com.google.android.gms.ads.APPLICATION_ID" not in c:
+              c = c.replace("</application>", admob + "    </application>")
+              p.write_text(c, encoding="utf-8")
+
+          print("AdMob configuration complete")
+          '
+
+          echo "Android project ready"
+
+      # 10. Build and sign APK
       - name: Build Signed Release APK
         working-directory: ${{ env.PROJECT_DIR }}
         env:
@@ -7,6 +133,11 @@
         run: |
           set -e
 
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEYSTORE_PASSWORD" ]; then
+            echo "ERROR: Signing secrets are missing"
+            exit 1
+          fi
+
           echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.keystore"
 
           cd android
@@ -14,15 +145,21 @@
 
           ./gradlew assembleRelease
 
-          $ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/apksigner sign \
+          BUILD_TOOLS=$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)
+
+          "$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner" sign \
             --ks "$RUNNER_TEMP/release.keystore" \
             --ks-key-alias rafiq \
             --ks-pass env:KEYSTORE_PASSWORD \
             --out app/build/outputs/apk/release/app-release.apk \
             app/build/outputs/apk/release/app-release-unsigned.apk
 
-          $ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/apksigner verify app/build/outputs/apk/release/app-release.apk
+          "$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner" verify \
+            app/build/outputs/apk/release/app-release.apk
 
+          echo "Signed APK created successfully"
+
+      # 11. Upload APK
       - name: Upload Signed APK
         uses: actions/upload-artifact@v4
         with:
