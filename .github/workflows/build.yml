@@ -1,3 +1,4 @@
+
 name: Build Android APK
 on:
   push:
@@ -37,6 +38,16 @@ jobs:
           node scripts/patch-android.js
           npx cap sync android
           python3 -c '
+          for rel in ["android/app/build.gradle", "android/variables.gradle"]:
+              try:
+                  with open(rel, "r") as f:
+                      txt = f.read()
+                  txt = txt.replace("compileSdkVersion 34", "compileSdkVersion 35").replace("targetSdkVersion 34", "targetSdkVersion 35")
+                  txt = txt.replace("compileSdk = 34", "compileSdk = 35").replace("targetSdk = 34", "targetSdk = 35")
+                  with open(rel, "w") as f:
+                      f.write(txt)
+              except FileNotFoundError:
+                  pass
           p = "android/app/src/main/AndroidManifest.xml"
           with open(p, "r") as f:
               c = f.read()
