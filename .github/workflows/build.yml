@@ -11,11 +11,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -26,50 +25,38 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - name: Accept Android SDK licenses
+      - name: Accept Android licenses
         run: yes | sdkmanager --licenses || true
 
       - name: Unpack project
         run: |
           set -e
-
           rm -rf project
-          mkdir -p project
+          mkdir project
 
           unzip -o app.zip -d project
 
           PACKAGE_JSON=$(find project -type f -name "package.json" -print -quit)
 
           if [ -z "$PACKAGE_JSON" ]; then
-            echo "ERROR: package.json was not found"
+            echo "ERROR: package.json not found"
             exit 1
           fi
 
           PROJECT_DIR=$(dirname "$PACKAGE_JSON")
-
-          echo "PROJECT_DIR=$PROJECT_DIR"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      - name: Download Quran
+      - name: Install dependencies
         working-directory: ${{ env.PROJECT_DIR }}
-        continue-on-error: true
         run: |
-          curl --retry 3 -fsSL \
-            https://api.alquran.cloud/v1/quran/quran-uthmani \
-            -o quran-raw.json
-
-          if [ -f scripts/prep-quran.js ]; then
-            node scripts/prep-quran.js
-          fi
+          set -e
+          npm install
+          npm install @capacitor-community/admob@6
 
       - name: Create Android project
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           set -e
-
-          npm install
-
-          npm install @capacitor-community/admob@6
 
           npx cap add android
 
@@ -79,21 +66,23 @@ jobs:
 
           npx cap sync android
 
-          python3 -c '
+      - name: Configure AdMob
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          python3 - <<'PY'
           from pathlib import Path
 
           p = Path("android/app/src/main/AndroidManifest.xml")
           c = p.read_text(encoding="utf-8")
 
-          admob = """        <meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="ca-app-pub-6630383601701998~1024264367"/>
-          """
+          admob = '        <meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="ca-app-pub-6630383601701998~1024264367"/>\n'
 
           if "com.google.android.gms.ads.APPLICATION_ID" not in c:
               c = c.replace("</application>", admob + "    </application>")
               p.write_text(c, encoding="utf-8")
 
-          print("AdMob configuration complete")
-          '
+          print("AdMob configured")
+          PY
 
       - name: Build APK
         working-directory: ${{ env.PROJECT_DIR }}
@@ -101,3 +90,55 @@ jobs:
           set -e
 
           cd android
+          chmod +x gradlew
+
+          ./gradlew assembleRelease
+
+      - name: Locate APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          set -e
+
+          echo "Searching for APK..."
+
+          find android -type f -name "*.apk" -print
+
+          APK=$(find android -type f -name "*.apk" | head -n 1)
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: No APK found"
+            exit 1
+          fi
+
+          echo "FOUND APK:"
+          ls -lh "$APK"
+
+          cp "$APK" "$GITHUB_WORKSPACE/rafiq-almuslim.apk"
+
+          echo "APK copied successfully"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+
+          echo "Checking APK..."
+          ls -lh rafiq-almuslim.apk
+
+          TAG="v1.0.0"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            TAG="v1.0.1"
+          fi
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            TAG="v1.0.2"
+          fi
+
+          echo "Creating release: $TAG"
+
+          gh release create "$TAG" \
+            rafiq-almuslim.apk \
+            --title "Rafiq Al-Muslim $TAG" \
+            --notes "Rafiq Al-Muslim Android APK"
