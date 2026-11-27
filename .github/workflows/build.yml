@@ -125,7 +125,7 @@ jobs:
           echo "Android project ready"
 
       # 10. Build and sign APK
-      - name: Build Signed Release APK
+            - name: Build Signed Release APK
         working-directory: ${{ env.PROJECT_DIR }}
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
@@ -133,12 +133,31 @@ jobs:
         run: |
           set -e
 
-          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEYSTORE_PASSWORD" ]; then
-            echo "ERROR: Signing secrets are missing"
+          echo "Checking signing secrets..."
+
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "ERROR: KEYSTORE_BASE64 is empty"
             exit 1
           fi
 
+          if [ -z "$KEYSTORE_PASSWORD" ]; then
+            echo "ERROR: KEYSTORE_PASSWORD is empty"
+            exit 1
+          fi
+
+          echo "Decoding keystore..."
+
           echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.keystore"
+
+          echo "Checking keystore file..."
+
+          ls -lh "$RUNNER_TEMP/release.keystore"
+
+          keytool -list \
+            -keystore "$RUNNER_TEMP/release.keystore" \
+            -storepass "$KEYSTORE_PASSWORD"
+
+          echo "Keystore is valid."
 
           cd android
           chmod +x gradlew
