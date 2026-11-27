@@ -38,7 +38,7 @@ jobs:
         run: yes | sdkmanager --licenses || true
 
       # ==========================================
-      # Extract app.zip and find package.json
+      # Extract project
       # ==========================================
       - name: Unpack project
         run: |
@@ -48,12 +48,13 @@ jobs:
           unzip -o app.zip -d project
 
           echo "=========================================="
-          echo "Extracted files:"
+          echo "Extracted files"
           echo "=========================================="
+
           find project -maxdepth 4 -type f | head -150
 
           echo "=========================================="
-          echo "Searching for package.json..."
+          echo "Searching for package.json"
           echo "=========================================="
 
           PACKAGE_JSON=$(find project -type f -name "package.json" -print -quit)
@@ -65,7 +66,7 @@ jobs:
 
           PROJECT_DIR=$(dirname "$PACKAGE_JSON")
 
-          echo "package.json found at:"
+          echo "package.json:"
           echo "$PACKAGE_JSON"
 
           echo "Project directory:"
@@ -74,7 +75,7 @@ jobs:
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
       # ==========================================
-      # Optional Firebase configuration
+      # Firebase
       # ==========================================
       - name: Add optional account settings
         run: |
@@ -87,14 +88,12 @@ jobs:
           fi
 
       # ==========================================
-      # Download Quran data
+      # Quran
       # ==========================================
-      - name: Download Quran text for the offline reader
+      - name: Download Quran text
         working-directory: ${{ env.PROJECT_DIR }}
         continue-on-error: true
         run: |
-          echo "Downloading Quran text..."
-
           curl --retry 3 -fsSL \
             https://api.alquran.cloud/v1/quran/quran-uthmani \
             -o quran-raw.json
@@ -102,26 +101,23 @@ jobs:
           if [ -f scripts/prep-quran.js ]; then
             node scripts/prep-quran.js
           else
-            echo "prep-quran.js not found - skipping preparation"
+            echo "prep-quran.js not found - skipping"
           fi
 
       # ==========================================
       # Create Android project
       # ==========================================
-      - name: Create the Android project and configure AdMob
+      - name: Create Android project and configure AdMob
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
+
           echo "=========================================="
-          echo "Installing npm dependencies"
+          echo "Installing dependencies"
           echo "=========================================="
 
           npm install
 
-          echo "=========================================="
-          echo "Installing AdMob plugin"
-          echo "=========================================="
-
-          npm install @capacitor-community/admob@6.2.0
+          npm install @capacitor-community/admob
 
           echo "=========================================="
           echo "Creating Android project"
@@ -129,176 +125,4 @@ jobs:
 
           npx cap add android
 
-          echo "=========================================="
-          echo "Patching Android project"
-          echo "=========================================="
-
-          if [ -f scripts/patch-android.js ]; then
-            node scripts/patch-android.js
-          else
-            echo "patch-android.js not found - skipping"
-          fi
-
-          echo "=========================================="
-          echo "Syncing Capacitor"
-          echo "=========================================="
-
-          npx cap sync android
-
-          echo "=========================================="
-          echo "Configuring Android SDK versions"
-          echo "=========================================="
-
-          python3 - <<'PY'
-          import glob
-          import re
-
-          files = (
-              glob.glob("android/**/*.gradle", recursive=True)
-              + glob.glob("android/**/*.gradle.kts", recursive=True)
-          )
-
-          for rel in files:
-              try:
-                  with open(rel, "r", encoding="utf-8") as f:
-                      txt = f.read()
-
-                  orig = txt
-
-                  txt = re.sub(
-                      r"(compileSdk(?:Version)?\s*(?:=|\s)\s*)\d+",
-                      r"\g<1>35",
-                      txt
-                  )
-
-                  txt = re.sub(
-                      r"(targetSdk(?:Version)?\s*(?:=|\s)\s*)\d+",
-                      r"\g<1>35",
-                      txt
-                  )
-
-                  txt = re.sub(
-                      r"(minSdk(?:Version)?\s*(?:=|\s)\s*)2[0-2]\b",
-                      r"\g<1>23",
-                      txt
-                  )
-
-                  if txt != orig:
-                      with open(rel, "w", encoding="utf-8") as f:
-                          f.write(txt)
-
-                      print("Updated:", rel)
-
-              except Exception as e:
-                  print("Skipped:", rel, e)
-
-          print("Android SDK configuration complete.")
-          PY
-
-          # ==========================================
-          # Add AdMob Application ID
-          # ==========================================
-
-          MANIFEST="android/app/src/main/AndroidManifest.xml"
-
-          if [ -f "$MANIFEST" ]; then
-
-            python3 - <<'PY'
-          from pathlib import Path
-
-          p = Path("android/app/src/main/AndroidManifest.xml")
-
-          c = p.read_text(encoding="utf-8")
-
-          ADMOB_ID = "ca-app-pub-6630383601701998~1024264367"
-
-          if "com.google.android.gms.ads.APPLICATION_ID" not in c:
-
-              meta = (
-                  f'        <meta-data '
-                  f'android:name="com.google.android.gms.ads.APPLICATION_ID" '
-                  f'android:value="{ADMOB_ID}"/>\n'
-              )
-
-              c = c.replace(
-                  "</application>",
-                  meta + "    </application>"
-              )
-
-              p.write_text(c, encoding="utf-8")
-
-              print("AdMob Application ID added.")
-
-          else:
-              print("AdMob Application ID already exists.")
-          PY
-
-          else
-            echo "ERROR: AndroidManifest.xml not found"
-            exit 1
-          fi
-
-      # ==========================================
-      # Build APK
-      # ==========================================
-      - name: Build signed release APK
-        working-directory: ${{ env.PROJECT_DIR }}/android
-        env:
-          KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
-        run: |
-          chmod +x gradlew
-
-          echo "=========================================="
-          echo "Looking for release keystore"
-          echo "=========================================="
-
-          find .. -name "*.keystore" -o -name "*.jks" || true
-
-          KEYSTORE=""
-
-          if [ -f "../release.keystore" ]; then
-            KEYSTORE="../release.keystore"
-          elif [ -f "../../release.keystore" ]; then
-            KEYSTORE="../../release.keystore"
-          elif [ -f "../rafiq.keystore" ]; then
-            KEYSTORE="../rafiq.keystore"
-          elif [ -f "../../rafiq.keystore" ]; then
-            KEYSTORE="../../rafiq.keystore"
-          fi
-
-          echo "Keystore detected:"
-          echo "$KEYSTORE"
-
-          if [ -n "$KEYSTORE" ] && [ -n "$KS_PASS" ]; then
-
-            echo "=========================================="
-            echo "Building signed RELEASE APK"
-            echo "=========================================="
-
-            ./gradlew assembleRelease \
-              -Pandroid.injected.signing.store.file="$KEYSTORE" \
-              -Pandroid.injected.signing.store.password="$KS_PASS" \
-              -Pandroid.injected.signing.key.alias=rafiq \
-              -Pandroid.injected.signing.key.password="$KS_PASS"
-
-          else
-
-            echo "=========================================="
-            echo "Release keystore/secret not available."
-            echo "Building DEBUG APK instead."
-            echo "=========================================="
-
-            ./gradlew assembleDebug
-
-          fi
-
-      # ==========================================
-      # Upload APK
-      # ==========================================
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: rafiq-almuslim-apk
-          path: |
-            ${{ env.PROJECT_DIR }}/android/app/build/outputs/apk/**/*.apk
-          if-no-files-found: error
+          if
