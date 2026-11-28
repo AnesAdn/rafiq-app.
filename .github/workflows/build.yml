@@ -1,3 +1,4 @@
+
 name: Build Rafiq Al-Muslim APK
 
 on:
@@ -43,6 +44,50 @@ jobs:
 
           PROJECT_DIR=$(dirname "$PACKAGE_JSON")
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Replace Test Ad ID with Real Ad ID
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          root = Path("project")
+
+          test_ids = [
+              "ca-app-pub-3940256099942544/6300978111",
+              "ca-app-pub-3940256099942544"
+          ]
+
+          real_id = "ca-app-pub-6630383601701998/7337411339"
+
+          count = 0
+
+          for p in root.rglob("*"):
+              if not p.is_file():
+                  continue
+
+              if any(x in p.parts for x in ["node_modules", ".git"]):
+                  continue
+
+              try:
+                  content = p.read_text(encoding="utf-8")
+                  original = content
+
+                  for test_id in test_ids:
+                      content = content.replace(test_id, real_id)
+
+                  if content != original:
+                      p.write_text(content, encoding="utf-8")
+                      print("Updated:", p)
+                      count += 1
+
+              except (UnicodeDecodeError, OSError):
+                  pass
+
+          print("Files updated:", count)
+
+          if count == 0:
+              print("WARNING: Test Ad ID not found.")
+          PY
 
       - name: Fix Capacitor package ID
         working-directory: project
