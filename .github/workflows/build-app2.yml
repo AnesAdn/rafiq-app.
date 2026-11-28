@@ -1,1 +1,151 @@
 
+name: Build Rafiq Al-Muslim 2 APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Accept Android licenses
+        run: yes | sdkmanager --licenses || true
+
+      - name: Unpack second app
+        run: |
+          set -e
+          mkdir -p project2
+          unzip -o app2.zip -d project2
+
+          PACKAGE_JSON=$(find project2 -type f -name "package.json" -print -quit)
+
+          if [ -z "$PACKAGE_JSON" ]; then
+            echo "ERROR: package.json not found"
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$PACKAGE_JSON")
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Configure second app ID and name
+        working-directory: project2
+        run: |
+          set -e
+
+          CONFIG=$(find . -type f -name "capacitor.config.json" -print -quit)
+
+          if [ -z "$CONFIG" ]; then
+            echo "ERROR: capacitor.config.json not found"
+            exit 1
+          fi
+
+          python3 - "$CONFIG" <<'PY'
+          import json
+          import sys
+
+          path = sys.argv[1]
+
+          with open(path, "r", encoding="utf-8") as f:
+              config = json.load(f)
+
+          config["appId"] = "com.muslimpartnerstudio.rafiqalmuslim2"
+          config["appName"] = "رفيق المسلم 2"
+
+          with open(path, "w", encoding="utf-8") as f:
+              json.dump(config, f, ensure_ascii=False, indent=2)
+
+          print("Second app configured")
+          PY
+
+      - name: Install dependencies
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          set -e
+          npm install
+          npm install @capacitor-community/admob@6
+
+      - name: Create Android project
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          set -e
+
+          npx cap add android
+
+          if [ -f scripts/patch-android.js ]; then
+            node scripts/patch-android.js
+          fi
+
+          npx cap sync android
+
+      - name: Configure AdMob
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("android/app/src/main/AndroidManifest.xml")
+          c = p.read_text(encoding="utf-8")
+
+          admob = '        <meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="ca-app-pub-6630383601701998~1024264367"/>\n'
+
+          if "com.google.android.gms.ads.APPLICATION_ID" not in c:
+              c = c.replace("</application>", admob + "    </application>")
+              p.write_text(c, encoding="utf-8")
+
+          print("AdMob configured")
+          PY
+
+      - name: Build second APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          set -e
+
+          cd android
+          chmod +x gradlew
+
+          ./gradlew assembleDebug
+
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: APK not found"
+            find app/build/outputs -type f
+            exit 1
+          fi
+
+          cp "$APK" "$GITHUB_WORKSPACE/rafiq-almuslim-2.apk"
+
+          echo "Second APK created successfully"
+          ls -lh "$GITHUB_WORKSPACE/rafiq-almuslim-2.apk"
+
+      - name: Upload second APK to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+
+          TAG="rafiq2-${GITHUB_RUN_NUMBER}"
+
+          gh release create "$TAG" \
+            "$GITHUB_WORKSPACE/rafiq-almuslim-2.apk" \
+            --title "Rafiq Al-Muslim 2 - ${GITHUB_RUN_NUMBER}" \
+            --notes "Second independent app APK"
+
